@@ -1,0 +1,406 @@
+---
+title: "YRBS_Analysis"
+author: "Michael Perez, Seth Galluci, Brian Bellamy, Harold Gonzalez"
+date: "2025-12-02"
+output: 
+  html_document:
+  toc: true
+  toc_float: true
+  number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#Install packages as needed with install.packages()
+library(survey)
+library(haven)
+library(here)
+library(ggplot2)
+library(tidyr)
+library(tidyverse)
+library(readr)
+library(dplyr)
+library(broom)
+library(viridis)
+library(survey)
+library(patchwork)
+library(broom)
+library(labelled)
+```
+
+
+```{r read dataset}
+yrbs23 <- read_sav(here("2023 Data/yrbs2023.sav"))
+
+#Recoding strips the labels sometimes, in order to avoid it, I am pre-saving the labels, and reapplying them after recoding.
+original_labels <- lapply(yrbs23, function(x)
+  attr(x, "label"))
+original_value_labels <- lapply(yrbs23, function(x)
+  attr(x, "labels"))
+```
+
+```{r}
+#Survey weighting. Regression models need to use this.
+
+yrbsdes23 <- svydesign(
+  id     = ~ psu,
+  strata = ~ stratum,
+  weights = ~ weight,
+  data   = yrbs23,
+  nest   = TRUE
+)
+
+```
+
+#Data Cleaning
+
+As far as I can tell, it's not really necessary to do a lot of it, the set is
+pretty clean and legible.
+
+For a data quality metric, again, this is a survey just like SSOCS, so all the
+answers are subjective and kids can lie. However, since what we're really
+looking at in some cases *is* kids subjective experience, for example "are you
+depressed?" well, that's really just a personal question.
+
+In other cases; "Are you smoking?", "Are you having sex?", and "How are your
+grades?", we might like to lean towards the truth in that case. But we'll have
+to just trust the data.
+
+Seth is really going to hate how this file is all back-to-back code blocks.
+Listen, it helps me organize it. And writing hashtags for long comments in R is
+annoying. Maybe if ctrl+? worked I wouldn't do this dumb shit. 
+
+Anyway, the only data cleaning I did is flipping the yes-no questions from 1= Yes 2=No to 0=No. With the ordinals they are all coded so higher is worse, and in all of the binary questions we use, a Yes is bad. So to make the graphs and regressions match, higher should be worse. Positive slopes mean social media makes it worse, negative means it makes it better.  
+
+```{r}
+#Identifies all binary variables in the dataset
+binary_vars <- names(Filter(function(x) {
+  vals <- unique(x)
+  all(vals %in% c(1, 2, NA))
+}, yrbs23))
+
+#Recodes all of the 2's to a 0 in binary variables so that graphs don't show up upside-down. Yes is almost always the worse answer in these questions, so Yes should be on top.
+yrbs23[binary_vars] <- lapply(yrbs23[binary_vars], function(x) {
+  ifelse(is.na(x), NA, ifelse(x == 1, 1, 0))
+})
+
+#If we run into any that we analyze that the No should be on top, we can individually recode that one back to a 2
+
+#In Q87, 6 and 7 are "None of these" and "Don't Know". This throws off the scale, so they are getting N/A'd.
+yrbs23$Q87 <- ifelse(yrbs23$Q87 %in% c(6, 7), NA, yrbs23$Q87)
+
+#Removes labels for the codes that no longer exist
+attr(yrbs23$Q87, "labels") <- attr(yrbs23$Q87, "labels")[1:5]
+
+#Reapplying labels
+for (v in binary_vars) {
+  if (!is.null(original_labels[[v]])) {
+    var_label(yrbs23[[v]]) <- original_labels[[v]]
+  }
+}
+
+for (v in binary_vars) {
+  val_labels(yrbs23[[v]]) <- c("No" = 0, "Yes" = 1)
+}
+
+# Restore Q87 variable label
+var_label(yrbs23$Q87) <- original_labels[["Q87"]]
+
+orig_vals_Q87 <- original_value_labels[["Q87"]]
+clean_vals_Q87 <- orig_vals_Q87[names(orig_vals_Q87) %in% c("1", "2", "3", "4", "5")]
+
+val_labels(yrbs23$Q87) <- clean_vals_Q87
+
+
+```
+
+Yes, that's all the cleaning. Yes, I'll delete the curse words before turning this in. 
+
+#Possible extra cleaning/analysis measures:
+Q12 is ordinal, but it is an ordinal scale of "How many times did you bring a weapon to school?"
+
+I feel like, maybe, it's fair to say that 1, is always too many times, and we can just recode that to 0-1 permanently for our purposes. 
+
+Q27 represents presence of any form of suicidal ideation. If we want to get more specific on it, we can dig into 28, 29, and 30.  
+
+```{r}
+#Individual simple regression loop for exploratory analysis
+
+#TODO: Just for fun, probably, somebody should just go ahead and run this on every Q variable.
+
+#Actually, I'll just do it now, but I'm not going to really analyze the results until later. Next code block.
+sig_vars <- c("Q42",
+              "Q33",
+              "Q36",
+              "Q93",
+              "Q56",
+              "Q16",
+              "Q12",
+              "Q24",
+              "Q26",
+              "Q27",
+              "Q84",
+              "Q87")
+
+results <- data.frame(
+  Variable = character(),
+  Level = character(),
+  Estimate = numeric(),
+  P_Value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (v in sig_vars) {
+  #
+  fmla <- as.formula(paste("Q80 ~", v))
+  
+  # Fit model
+  m <- svyglm(fmla, design = yrbsdes23)
+  
+  # Tidy output
+  tidy_m <- tidy(m)
+  
+  # Keep only the rows that are NOT the intercept
+  effects <- tidy_m[tidy_m$term != "(Intercept)", ]
+  
+  # Add each effect to results table
+  for (i in seq_len(nrow(effects))) {
+    results <- rbind(
+      results,
+      data.frame(
+        Variable = v,
+        Level = effects$term[i],
+        Estimate = effects$estimate[i],
+        P_Value = effects$p.value[i]
+      )
+    )
+  }
+}
+
+results
+```
+
+```{r, eval=FALSE}
+#I'm gonna call this technique the Improved Samantha Method. Is that mean?
+
+#Notice, I set eval=FALSE on this block. It will be skipped in a knit and a run-all. If you want this printout, you need to run this block individually. I was trying to keep your computer from exploding.
+
+all_Q_vars <- paste0("Q", 1:107)
+present_Q <- intersect(all_Q_vars, names(yrbs23))
+
+# Keep only numeric Q variables with >1 unique value
+is_num <- sapply(present_Q, function(v) {
+  x <- yrbs23[[v]]
+  is.numeric(x) || inherits(x, "haven_labelled")
+})
+
+has_variation <- sapply(present_Q, function(v) {
+  x <- yrbs23[[v]]
+  length(unique(x[!is.na(x)])) > 1
+})
+
+numeric_Q_vars <- present_Q[is_num & has_variation]
+
+# Don’t regress Q80 on itself
+sig_vars <- setdiff(numeric_Q_vars, "Q80")
+
+results <- data.frame(
+  Variable = character(),
+  Level = character(),
+  Estimate = numeric(),
+  P_Value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (v in sig_vars) {
+  fmla <- as.formula(paste(v, "~ Q80"))
+  m <- try(svyglm(fmla, design = yrbsdes23), silent = TRUE)
+  
+  # Skip if model failed
+  if (inherits(m, "try-error"))
+    next
+  
+  tidy_m <- tidy(m)
+  effects <- tidy_m[tidy_m$term != "(Intercept)", ]
+  
+  if (nrow(effects) > 0) {
+    results <- rbind(
+      results,
+      data.frame(
+        Variable = v,
+        Level    = effects$term,
+        Estimate = effects$estimate,
+        P_Value  = effects$p.value,
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+}
+
+results
+```
+
+```{r variable check and some setup, include = FALSE}
+# Just checking to make sure the variables are coded as expected
+
+# This runs a print that shows the variable name, label, value coding, and frequencies for a sanity check.
+
+table(yrbs23$Q42, useNA = "ifany")
+
+attr(yrbs23$Q42, "labels")
+
+#Really, feel free to add any you're interested in here. As we "disqualify" some of these by proving there is no interesting correlation, we can focus on others.
+vars_to_check <- c("Q12",
+                   "Q16",
+                   "Q24",
+                   "Q26",
+                   "Q27",
+                   "Q33",
+                   "Q36",
+                   "Q42",
+                   "Q56",
+                   "Q84",
+                   "Q87",
+                   "Q93")
+
+#Since we're at defining groups of vars to use for various purposes, here's a couple more reusable variables.
+
+#Variables in the dataset, that we care about, that use a 0-1 scale (after recoding)
+bin_vars <- c("Q24", "Q26", "Q27", "Q56")
+
+#Variables in the dataset, that we care about, that use a 1-7 scale
+ord_vars <- c("Q12", "Q16", "Q33", "Q36", "Q42", "Q84", "Q87", "Q93")
+
+#Used later
+all_plot_vars <- setdiff(c(bin_vars, ord_vars), "Q80")
+
+
+
+#A neat piece of copyable code also, use this to make good labels. It pulls the "real" column name from the Q designator.
+#paste(attr(yrbs23[[v]], "label"))
+
+for (v in vars_to_check) {
+  cat("\n==============================\n")
+  cat("Variable:", v, "\n")
+  
+  # Print SPSS variable label (the descriptive text)
+  var_label <- attr(yrbs23[[v]], "label")
+  cat("Label:", var_label, "\n")
+  
+  # Print value labels (1=..., 2=..., etc.)
+  value_labels <- attr(yrbs23[[v]], "labels")
+  cat("Value Labels:\n")
+  print(value_labels)
+  
+  # Print observed frequencies
+  cat("Frequencies:\n")
+  print(table(yrbs23[[v]], useNA = "ifany"))
+}
+
+```
+
+Plotting
+
+```{r}
+#Multi box-plot of all variables.
+plot_list <- lapply(all_plot_vars, function(v) {
+  ggplot(yrbs23 %>% drop_na(all_of(v), Q80), aes(x = factor(Q80), y = .data[[v]])) +
+    geom_boxplot() +
+    labs(x = "Social Media Use (Q80)", y = v, title = get_title(v))
+})
+
+wrap_plots(plotlist = plot_list, ncol = 3)
+```
+
+
+```{r}
+#Ensures the proportional barplots treat binaries and ordinals correctly.
+is_binary <- function(v) {
+  all(unique(yrbs23[[v]][!is.na(yrbs23[[v]])]) %in% c(0, 1))
+}
+
+#Proportional barplot
+plot_list <- lapply(all_plot_vars, function(v) {
+  df <- yrbs23 %>% drop_na(Q80, all_of(v))
+  
+  if (is_binary(v)) {
+    df <- df %>% mutate(any_behavior = .data[[v]])
+  } else {
+    df <- df %>% mutate(any_behavior = ifelse(.data[[v]] == 1, 0, 1))
+  }
+  
+  temp <- df %>% group_by(Q80) %>% summarise(percent = mean(any_behavior) * 100)
+  
+  ggplot(temp, aes(x = factor(Q80), y = percent)) +
+    geom_col(fill = "steelblue", alpha = 0.8) +
+    geom_text(aes(label = sprintf("%.1f%%", percent)), vjust = -0.5) +
+    labs(x = "Social Media Use (Q80)", y = "Percent (%)", title = get_title(v)) +
+    ylim(0, 100) +
+    theme_minimal()
+})
+
+wrap_plots(plotlist = plot_list, ncol = 3)
+```
+
+```{r stacked bars}
+make_stacked_bar <- function(v) {
+  yrbs23 %>%
+    drop_na(Q80, all_of(v)) %>%
+    mutate(Q80 = factor(Q80), outcome = factor(.data[[v]])) %>%
+    count(Q80, outcome) %>%
+    group_by(Q80) %>%
+    mutate(prop = n / sum(n)) %>%
+    ggplot(aes(x = Q80, y = prop, fill = outcome)) +
+    geom_col(color = "black", linewidth = 0.1) +
+    scale_y_continuous(labels = scales::percent_format()) +
+    labs(
+      title = get_title(v),
+      x = "Social Media Use (Q80)",
+      y = "Percent",
+      fill = v
+    )  +
+    theme_minimal(base_size = 11)
+}
+
+stacked_plots <- lapply(all_plot_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+
+```
+
+
+```{r}
+make_mean_plot <- function(v) {
+  yrbs23 %>%
+    drop_na(Q80, all_of(v)) %>%
+    mutate(Q80_num = as.numeric(Q80)) %>%
+    group_by(Q80_num) %>%
+    summarise(mean_value = mean(.data[[v]])) %>%
+    ggplot(aes(x = Q80_num, y = mean_value)) +
+    geom_line(size = 1.1, color = "steelblue") +
+    geom_point(size = 3, color = "steelblue") +
+    scale_x_continuous(breaks = sort(unique(as.numeric(yrbs23$Q80)))) +
+    labs(
+      title = paste(attr(yrbs23[[v]], "label")),
+      x = "Social Media Use (Q80)",
+      y = paste("Mean", v, "(higher = worse)")
+    ) +
+    theme_minimal(base_size = 11)
+}
+
+
+mean_plots <- lapply(all_plot_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+
+This *MIGHT* be enough graphs. And we might not even need them all. Or maybe we do more. I was trying to avoid getting my brain stuck in regression since we've been talking about it in class for so long. 
+
+We should go back to the beginning of the semester and look back at some of the ways we described statistics, some of those might be more helpful for these types of problems, since when we do have slopes, they aren't always very strong. 
+
+We also need to sometimes look at these from multiple angles, for example, in the alcohol chart, the correlations get a lot more clear when I recoded it to a binary and represented it proportionally. 
+
+A good approach might be to demonstrate which variables do/don't have relationships with social media using the charts, then use the regression data to define and describe those relationships. 
+
+---
