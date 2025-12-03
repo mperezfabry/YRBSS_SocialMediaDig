@@ -1,0 +1,114 @@
+---
+title: "YRBS_Analysis"
+author: "Michael Perez, Seth Galluci, Brian Bellamy, Harold Gonzalez"
+date: "2025-12-02"
+output: 
+  html_document:
+  toc: true
+  toc_float: true
+  number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#Install packages as needed with install.packages()
+library(survey)
+library(haven)
+library(here)
+library(ggplot2)
+library(tidyr)
+library(tidyverse)
+library(readr)
+library(dplyr)
+library(broom)
+library(viridis)
+library(survey)
+```
+
+
+```{r read dataset}
+yrbs23 <- read_sav(here("2023 Data/yrbs2023.sav"))
+```
+
+```{r}
+#Survey weighting. Regression models need to use this. 
+
+yrbsdes23 <- svydesign(
+  id     = ~psu,
+  strata = ~stratum,
+  weights= ~weight,
+  data   = yrbs23,
+  nest   = TRUE
+)
+
+```
+
+```{r}
+#Individual simple regression loop for exploratory analysis
+  
+sig_vars <- c(
+  "QN42",
+  "QN33",
+  "QN36",
+  "QN93",
+  "QN56",
+  "QN16",
+  "QN12",
+  "QN24",
+  "QN26",
+  "QN27",
+  "QN84",
+  "QN87"
+)
+
+results <- data.frame(
+  Variable = character(),
+  Level = character(),
+  Estimate = numeric(),
+  P_Value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (v in sig_vars) {
+  
+  # 
+  fmla <- as.formula(paste("Q80 ~", v))
+  
+  # Fit model
+  m <- svyglm(fmla, design = yrbsdes23)
+  
+  # Tidy output
+  tidy_m <- tidy(m)
+  
+  # Keep only the rows that are NOT the intercept
+  effects <- tidy_m[ tidy_m$term != "(Intercept)", ]
+  
+  # Add each effect to results table
+  for (i in seq_len(nrow(effects))) {
+    results <- rbind(
+      results,
+      data.frame(
+        Variable = v,
+        Level = effects$term[i],
+        Estimate = effects$estimate[i],
+        P_Value = effects$p.value[i]
+      )
+    )
+  }
+}
+
+results
+```
+
+```{r}
+yrbs_data %>% 
+  filter(!is.na(`Q80`), !is.na(`QN56`)) %>%
+  group_by(`QN56`) %>%
+  summarize()
+  
+
+ggplot(yrbs23, aes(x=`Q80`, fill = factor(`QN56`))) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = scales::percent)
+  
+```
