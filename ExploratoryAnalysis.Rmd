@@ -29,7 +29,7 @@ library(labelled)
 ```
 
 
-```{r read dataset}
+```{r read dataset, echo=FALSE}
 yrbs23 <- read_sav(here("2023 Data/yrbs2023.sav"))
 
 #Recoding strips the labels sometimes, in order to avoid it, I am pre-saving the labels, and reapplying them after recoding.
@@ -39,40 +39,11 @@ original_value_labels <- lapply(yrbs23, function(x)
   attr(x, "labels"))
 ```
 
-```{r}
-#Survey weighting. Regression models need to use this.
-
-yrbsdes23 <- svydesign(
-  id     = ~ psu,
-  strata = ~ stratum,
-  weights = ~ weight,
-  data   = yrbs23,
-  nest   = TRUE
-)
-
-```
-
 #Data Cleaning
 
-As far as I can tell, it's not really necessary to do a lot of it, the set is
-pretty clean and legible.
+Ensured ordinals are all worse = higher, flipped binaries from 1-2 to 0-1 to match. 
 
-For a data quality metric, again, this is a survey just like SSOCS, so all the
-answers are subjective and kids can lie. However, since what we're really
-looking at in some cases *is* kids subjective experience, for example "are you
-depressed?" well, that's really just a personal question.
-
-In other cases; "Are you smoking?", "Are you having sex?", and "How are your
-grades?", we might like to lean towards the truth in that case. But we'll have
-to just trust the data.
-
-Seth is really going to hate how this file is all back-to-back code blocks.
-Listen, it helps me organize it. And writing hashtags for long comments in R is
-annoying. Maybe if ctrl+? worked I wouldn't do this dumb shit. 
-
-Anyway, the only data cleaning I did is flipping the yes-no questions from 1= Yes 2=No to 0=No. With the ordinals they are all coded so higher is worse, and in all of the binary questions we use, a Yes is bad. So to make the graphs and regressions match, higher should be worse. Positive slopes mean social media makes it worse, negative means it makes it better.  
-
-```{r}
+```{r , echo=FALSE}
 #Identifies all binary variables in the dataset
 binary_vars <- names(Filter(function(x) {
   vals <- unique(x)
@@ -88,6 +59,22 @@ yrbs23[binary_vars] <- lapply(yrbs23[binary_vars], function(x) {
 
 #In Q87, 6 and 7 are "None of these" and "Don't Know". This throws off the scale, so they are getting N/A'd.
 yrbs23$Q87 <- ifelse(yrbs23$Q87 %in% c(6, 7), NA, yrbs23$Q87)
+
+#Recoding Q80 - 2 and 3 mean the same thing essentially "A few time a month" "Once a week", and they have much fewer responses than the other categories, which may be spiking the graphs and screwing up the regression curves.
+
+yrbs23$Q80old <- yrbs23$Q80
+
+yrbs23$Q80 <- case_when(
+  yrbs23$Q80 == 1 ~ 1,
+  yrbs23$Q80 %in% c(2, 3) ~ 2,
+  yrbs23$Q80 == 4 ~ 3,
+  yrbs23$Q80 == 5 ~ 4,
+  yrbs23$Q80 == 6 ~ 5,
+  yrbs23$Q80 == 7 ~ 6,
+  yrbs23$Q80 == 8 ~ 7,
+  TRUE ~ NA_real_
+)
+
 
 #Removes labels for the codes that no longer exist
 attr(yrbs23$Q87, "labels") <- attr(yrbs23$Q87, "labels")[1:5]
@@ -110,25 +97,28 @@ orig_vals_Q87 <- original_value_labels[["Q87"]]
 clean_vals_Q87 <- orig_vals_Q87[names(orig_vals_Q87) %in% c("1", "2", "3", "4", "5")]
 
 val_labels(yrbs23$Q87) <- clean_vals_Q87
+table(yrbs23$Q80, useNA = "ifany")
 
+```
+```{r, echo=FALSE}
+#Survey weighting. Regression models need to use this.
+
+yrbsdes23 <- svydesign(
+  id     = ~ psu,
+  strata = ~ stratum,
+  weights = ~ weight,
+  data   = yrbs23,
+  nest   = TRUE
+)
 
 ```
 
-Yes, that's all the cleaning. Yes, I'll delete the curse words before turning this in. 
-
-#Possible extra cleaning/analysis measures:
-Q12 is ordinal, but it is an ordinal scale of "How many times did you bring a weapon to school?"
-
-I feel like, maybe, it's fair to say that 1, is always too many times, and we can just recode that to 0-1 permanently for our purposes. 
-
-Q27 represents presence of any form of suicidal ideation. If we want to get more specific on it, we can dig into 28, 29, and 30.  
-
-```{r}
+```{r, echo=FALSE}
 #Individual simple regression loop for exploratory analysis
 
-#TODO: Just for fun, probably, somebody should just go ahead and run this on every Q variable.
+table(yrbs23$Q80, useNA = "ifany")
 
-#Actually, I'll just do it now, but I'm not going to really analyze the results until later. Next code block.
+
 sig_vars <- c("Q42",
               "Q33",
               "Q36",
@@ -180,9 +170,7 @@ for (v in sig_vars) {
 results
 ```
 
-```{r, eval=FALSE}
-#I'm gonna call this technique the Improved Samantha Method. Is that mean?
-
+```{r, echo=FALSE}
 #Notice, I set eval=FALSE on this block. It will be skipped in a knit and a run-all. If you want this printout, you need to run this block individually. I was trying to keep your computer from exploding.
 
 all_Q_vars <- paste0("Q", 1:107)
@@ -240,7 +228,7 @@ for (v in sig_vars) {
 results
 ```
 
-```{r variable check and some setup, include = FALSE}
+```{r variable check and some setup, echo=FALSE}
 # Just checking to make sure the variables are coded as expected
 
 # This runs a print that shows the variable name, label, value coding, and frequencies for a sanity check.
@@ -301,7 +289,7 @@ for (v in vars_to_check) {
 
 Plotting
 
-```{r}
+```{r, echo=FALSE}
 #Multi box-plot of all variables.
 plot_list <- lapply(all_plot_vars, function(v) {
   ggplot(yrbs23 %>% drop_na(all_of(v), Q80), aes(x = factor(Q80), y = .data[[v]])) +
@@ -313,7 +301,7 @@ wrap_plots(plotlist = plot_list, ncol = 3)
 ```
 
 
-```{r}
+```{r, echo=FALSE}
 #Ensures the proportional barplots treat binaries and ordinals correctly.
 is_binary <- function(v) {
   all(unique(yrbs23[[v]][!is.na(yrbs23[[v]])]) %in% c(0, 1))
@@ -334,7 +322,7 @@ plot_list <- lapply(all_plot_vars, function(v) {
   ggplot(temp, aes(x = factor(Q80), y = percent)) +
     geom_col(fill = "steelblue", alpha = 0.8) +
     geom_text(aes(label = sprintf("%.1f%%", percent)), vjust = -0.5) +
-    labs(x = "Social Media Use (Q80)", y = "Percent (%)", title = paste(attr(yrbs23[[v]], "label"))) +
+    labs(x = "Social Media Use (Q80)", y = "Percent (%)", title = paste0(v, ": ", attr(yrbs23[[v]], "label"))) +
     ylim(0, 100) +
     theme_minimal()
 })
@@ -342,7 +330,7 @@ plot_list <- lapply(all_plot_vars, function(v) {
 wrap_plots(plotlist = plot_list, ncol = 3)
 ```
 
-```{r stacked bars}
+```{r stacked bars, echo=FALSE}
 make_stacked_bar <- function(v) {
   yrbs23 %>%
     drop_na(Q80, all_of(v)) %>%
@@ -354,7 +342,7 @@ make_stacked_bar <- function(v) {
     geom_col(color = "black", linewidth = 0.1) +
     scale_y_continuous(labels = scales::percent_format()) +
     labs(
-      title = paste(attr(yrbs23[[v]], "label")),
+      title = paste0(v, ": ", attr(yrbs23[[v]], "label")),
       x = "Social Media Use (Q80)",
       y = "Percent",
       fill = v
@@ -371,7 +359,7 @@ wrap_plots(plotlist = stacked_plots, ncol = 3)
 ```
 
 
-```{r}
+```{r, echo=FALSE}
 make_mean_plot <- function(v) {
   yrbs23 %>%
     drop_na(Q80, all_of(v)) %>%
@@ -383,7 +371,7 @@ make_mean_plot <- function(v) {
     geom_point(size = 3, color = "steelblue") +
     scale_x_continuous(breaks = sort(unique(as.numeric(yrbs23$Q80)))) +
     labs(
-      title = paste(attr(yrbs23[[v]], "label")),
+      title = paste0(v, ": ", attr(yrbs23[[v]], "label")),
       x = "Social Media Use (Q80)",
       y = paste("Mean", v, "(higher = worse)")
     ) +
@@ -394,7 +382,114 @@ make_mean_plot <- function(v) {
 mean_plots <- lapply(all_plot_vars, make_mean_plot)
 wrap_plots(plotlist = mean_plots, ncol = 3)
 ```
+```{r}
+current_Q_vars <- paste0("Q", 1:12)
+mean_plots <- lapply(current_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+stacked_plots <- lapply(current_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
 
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
+```{r}
+current_Q_vars <- paste0("Q", 13:24)
+mean_plots <- lapply(current_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+stacked_plots <- lapply(current_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
+```{r}
+current_Q_vars <- paste0("Q", 25:36)
+mean_plots <- lapply(current_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+stacked_plots <- lapply(current_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
+```{r}
+current_Q_vars <- paste0("Q", 37:48)
+mean_plots <- lapply(current_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+stacked_plots <- lapply(current_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
+```{r}
+current_Q_vars <- paste0("Q", 49:62)
+mean_plots <- lapply(current_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+stacked_plots <- lapply(current_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
+```{r}
+current_Q_vars <- paste0("Q", 63:74)
+mean_plots <- lapply(current_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+stacked_plots <- lapply(current_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
+```{r}
+current_Q_vars <- paste0("Q", 75:86)
+mean_plots <- lapply(current_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+stacked_plots <- lapply(current_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
+```{r}
+current_Q_vars <- paste0("Q", 87:98)
+mean_plots <- lapply(current_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+stacked_plots <- lapply(current_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
+```{r}
+current_Q_vars <- paste0("Q", 99:107)
+mean_plots <- lapply(current_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+stacked_plots <- lapply(current_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
 This *MIGHT* be enough graphs. And we might not even need them all. Or maybe we do more. I was trying to avoid getting my brain stuck in regression since we've been talking about it in class for so long. 
 
 We should go back to the beginning of the semester and look back at some of the ways we described statistics, some of those might be more helpful for these types of problems, since when we do have slopes, they aren't always very strong. 
