@@ -11,7 +11,8 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-#Install packages as needed with install.packages()
+#Install packages as needed with
+#install.packages()
 library(survey)
 library(haven)
 library(here)
@@ -26,6 +27,7 @@ library(survey)
 library(patchwork)
 library(broom)
 library(labelled)
+library(jtools)
 ```
 
 
@@ -98,7 +100,7 @@ clean_vals_Q87 <- orig_vals_Q87[names(orig_vals_Q87) %in% c("1", "2", "3", "4", 
 
 val_labels(yrbs23$Q87) <- clean_vals_Q87
 table(yrbs23$Q80, useNA = "ifany")
-
+table(yrbs23$Q2, useNA = "ifany")
 ```
 ```{r, echo=FALSE}
 #Survey weighting. Regression models need to use this.
@@ -113,7 +115,7 @@ yrbsdes23 <- svydesign(
 
 ```
 
-```{r, echo=FALSE}
+```{r}
 #Individual simple regression loop for exploratory analysis
 
 table(yrbs23$Q80, useNA = "ifany")
@@ -170,7 +172,7 @@ for (v in sig_vars) {
 results
 ```
 
-```{r, echo=FALSE}
+```{r, eval=FALSE}
 #Notice, I set eval=FALSE on this block. It will be skipped in a knit and a run-all. If you want this printout, you need to run this block individually. I was trying to keep your computer from exploding.
 
 all_Q_vars <- paste0("Q", 1:107)
@@ -225,7 +227,10 @@ for (v in sig_vars) {
   }
 }
 
-results
+final_sorted <- results %>%
+  arrange(desc(abs(Estimate)))
+
+print(head(final_sorted, 20))
 ```
 
 ```{r variable check and some setup, echo=FALSE}
@@ -233,23 +238,17 @@ results
 
 # This runs a print that shows the variable name, label, value coding, and frequencies for a sanity check.
 
-table(yrbs23$Q42, useNA = "ifany")
+#table(yrbs23$Q42, useNA = "ifany")
 
-attr(yrbs23$Q42, "labels")
+#attr(yrbs23$Q42, "labels")
 
 #Really, feel free to add any you're interested in here. As we "disqualify" some of these by proving there is no interesting correlation, we can focus on others.
-vars_to_check <- c("Q12",
-                   "Q16",
-                   "Q24",
-                   "Q26",
-                   "Q27",
-                   "Q33",
-                   "Q36",
-                   "Q42",
-                   "Q56",
-                   "Q84",
-                   "Q87",
-                   "Q93")
+vars_to_check <- c("Q12",                  "Q16",
+                   "Q24",                   "Q26",
+                   "Q27",                   "Q33",
+                   "Q36",                   "Q42",
+                   "Q56",                   "Q84",
+                   "Q87",                   "Q93")
 
 #Since we're at defining groups of vars to use for various purposes, here's a couple more reusable variables.
 
@@ -267,23 +266,94 @@ all_plot_vars <- setdiff(c(bin_vars, ord_vars), "Q80")
 #A neat piece of copyable code also, use this to make good labels. It pulls the "real" column name from the Q designator.
 #paste(attr(yrbs23[[v]], "label"))
 
-for (v in vars_to_check) {
-  cat("\n==============================\n")
-  cat("Variable:", v, "\n")
-  
+# for (v in vars_to_check) {
+#  cat("\n==============================\n")
+#  cat("Variable:", v, "\n")
+#  
   # Print SPSS variable label (the descriptive text)
-  var_label <- attr(yrbs23[[v]], "label")
-  cat("Label:", var_label, "\n")
-  
-  # Print value labels (1=..., 2=..., etc.)
-  value_labels <- attr(yrbs23[[v]], "labels")
-  cat("Value Labels:\n")
-  print(value_labels)
+#  var_label <- attr(yrbs23[[v]], "label")
+#  cat("Label:", var_label, "\n")
+#  
+#  # Print value labels (1=..., 2=..., etc.)
+#  value_labels <- attr(yrbs23[[v]], "labels")
+#  cat("Value Labels:\n")
+#  print(value_labels)
   
   # Print observed frequencies
-  cat("Frequencies:\n")
-  print(table(yrbs23[[v]], useNA = "ifany"))
+#  cat("Frequencies:\n")
+#  print(table(yrbs23[[v]], useNA = "ifany"))
+#}
+
+```
+
+```{r, correlation matrix}
+
+# 1. Define variables (Same as before)
+q_vars <- paste0("Q", 1:107)
+vars_to_use <- intersect(c("Q80", q_vars), names(yrbs23))
+
+# Ensure numeric (Same as before)
+yrbs23 <- yrbs23 %>%
+  mutate(across(all_of(vars_to_use), as.numeric))
+
+# Re-design object (Same as before)
+yrbsdes23 <- svydesign(
+  id      = ~ psu,
+  strata  = ~ stratum,
+  weights = ~ weight,
+  data    = yrbs23,
+  nest    = TRUE
+)
+
+# =========================================================
+# THE MEMORY FIX: Pairwise Loop
+# =========================================================
+
+# ... (Assuming your variables are defined and design object is created from the previous step) ...
+
+# =========================================================
+# THE FIX: Pairwise Loop with na.rm = TRUE
+# =========================================================
+
+# Identify all variables EXCEPT Q80
+other_vars <- setdiff(vars_to_use, "Q80")
+
+# Create an empty container
+q80_cor_results <- data.frame(
+  Variable = character(),
+  Correlation = numeric(),
+  stringsAsFactors = FALSE
+)
+
+print("Starting correlation loop...")
+
+for (v in other_vars) {
+  
+  # Formula: ~ Q80 + Current_Variable
+  pair_formula <- as.formula(paste("~ Q80 +", v))
+  
+  try({
+    # FIX: Added na.rm = TRUE to ignore missing student answers
+    res <- svycor(pair_formula, design = yrbsdes23, sig.stats = FALSE, na.rm = TRUE)
+    
+    # Extract the correlation
+    val <- res$cors[1, 2]
+    
+    # Check if the result is a valid number (not NaN)
+    # NaN happens if a variable has 0 variance (e.g., everyone gave the same answer)
+    if (!is.nan(val) && !is.na(val)) {
+      q80_cor_results <- rbind(q80_cor_results, 
+                               data.frame(Variable = v, Correlation = val))
+    }
+    
+  }, silent = TRUE)
 }
+
+# Sort and View
+final_sorted <- q80_cor_results %>%
+  arrange(desc(abs(Correlation)))
+
+print(head(final_sorted, 20))
 
 ```
 
@@ -395,6 +465,28 @@ stacked_plots <- lapply(current_Q_vars, function(v) {
 wrap_plots(plotlist = stacked_plots, ncol = 3)
 ```
 ```{r}
+plot_list <- lapply(current_Q_vars, function(v) {
+  df <- yrbs23 %>% drop_na(Q80, all_of(v))
+  
+  if (is_binary(v)) {
+    df <- df %>% mutate(any_behavior = .data[[v]])
+  } else {
+    df <- df %>% mutate(any_behavior = ifelse(.data[[v]] == 1, 0, 1))
+  }
+  
+  temp <- df %>% group_by(Q80) %>% summarise(percent = mean(any_behavior) * 100)
+  
+  ggplot(temp, aes(x = factor(Q80), y = percent)) +
+    geom_col(fill = "steelblue", alpha = 0.8) +
+    geom_text(aes(label = sprintf("%.1f%%", percent)), vjust = -0.5) +
+    labs(x = "Social Media Use (Q80)", y = "Percent (%)", title = paste0(v, ": ", attr(yrbs23[[v]], "label"))) +
+    ylim(0, 100) +
+    theme_minimal()
+})
+
+wrap_plots(plotlist = plot_list, ncol = 3)
+```
+```{r}
 current_Q_vars <- paste0("Q", 13:24)
 mean_plots <- lapply(current_Q_vars, make_mean_plot)
 wrap_plots(plotlist = mean_plots, ncol = 3)
@@ -431,7 +523,7 @@ stacked_plots <- lapply(current_Q_vars, function(v) {
 wrap_plots(plotlist = stacked_plots, ncol = 3)
 ```
 ```{r}
-current_Q_vars <- paste0("Q", 49:62)
+current_Q_vars <- paste0("Q", 49:60)
 mean_plots <- lapply(current_Q_vars, make_mean_plot)
 wrap_plots(plotlist = mean_plots, ncol = 3)
 ```
@@ -490,12 +582,799 @@ stacked_plots <- lapply(current_Q_vars, function(v) {
 
 wrap_plots(plotlist = stacked_plots, ncol = 3)
 ```
-This *MIGHT* be enough graphs. And we might not even need them all. Or maybe we do more. I was trying to avoid getting my brain stuck in regression since we've been talking about it in class for so long. 
-
-We should go back to the beginning of the semester and look back at some of the ways we described statistics, some of those might be more helpful for these types of problems, since when we do have slopes, they aren't always very strong. 
-
-We also need to sometimes look at these from multiple angles, for example, in the alcohol chart, the correlations get a lot more clear when I recoded it to a binary and represented it proportionally. 
-
-A good approach might be to demonstrate which variables do/don't have relationships with social media using the charts, then use the regression data to define and describe those relationships. 
 
 ---
+
+Exploratory analysis of graphs done, the following variables were selected as those with the strongest or most interesting relationships. 
+
+```{r}
+selected_Q_vars <- c("Q11", "Q22", "Q31", "Q33", "Q33", "Q34", "Q36", "Q41", "Q42", "Q56", "Q57", "Q74", "Q84", "Q94", "Q88", "Q89", "Q101")
+
+stacked_plots <- lapply(selected_Q_vars, function(v) {
+  make_stacked_bar(v)
+})
+
+wrap_plots(plotlist = stacked_plots, ncol = 3)
+```
+
+```{r}
+mean_plots <- lapply(selected_Q_vars, make_mean_plot)
+wrap_plots(plotlist = mean_plots, ncol = 3)
+```
+```{r}
+# 1. Define your selected list of "interesting" variables
+selected_vars <- selected_Q_vars
+
+# 2. Create an empty container for the results
+final_results_univariate <- data.frame(
+  Variable = character(),
+  Level = character(),
+  Estimate = numeric(),
+  P_Value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (v in selected_vars) {
+
+  fmla <- as.formula(paste(v, "~ Q80"))
+  
+  # Fit the model
+  m <- svyglm(fmla, design = yrbsdes23)
+  
+  # Tidy the output
+  tidy_m <- tidy(m)
+  
+  # Keep all rows (except Intercept)
+  effects <- tidy_m[tidy_m$term != "(Intercept)", ]
+  
+  # Append to your results table
+  for (i in seq_len(nrow(effects))) {
+    final_results_univariate <- rbind(
+      final_results_univariate,
+      data.frame(
+        Variable = v,
+        Level = effects$term[i],
+        Estimate = effects$estimate[i],
+        P_Value = effects$p.value[i]
+      )
+    )
+  }
+}
+
+# 4. View the results
+print(final_results_univariate)
+```
+
+Beyond this point are graphs and tables produced to be targeted for use in the final report.
+
+```{r, eval=FALSE}
+# 1. Fit the actual survey model first
+my_model <- svyglm(Q41 ~ Q80, design = yrbsdes23)
+
+# 2. Extract the slope and intercept
+model_intercept <- coef(my_model)[1]
+model_slope <- coef(my_model)[2]
+
+# 3. Plot it
+ggplot(yrbs23, aes(x = Q80, y = Q41)) +
+  geom_jitter(width = 0.3, height = 0.3, alpha = 0.1) +
+  
+  # Use geom_abline with your extracted numbers
+  geom_abline(intercept = model_intercept, slope = model_slope, 
+              color = "red", size = 1.2) +
+  
+  theme_minimal() +
+  labs(title = "Age of Alcohol Initiation vs. Social Media Use")
+
+```
+
+```{r}
+# 1. Recode Q41 (Flipping 2-7, keeping 1 as 1)
+yrbs23 <- yrbs23 %>%
+  mutate(Q41_Recoded = case_when(
+    Q41 == 1 ~ 1,  # Never drank (Lowest Risk)
+    Q41 == 2 ~ 7,  # <8 years old (Highest Risk)
+    Q41 == 3 ~ 6,  # 9-10 years old
+    Q41 == 4 ~ 5,  # 11-12 years old
+    Q41 == 5 ~ 4,  # 13-14 years old
+    Q41 == 6 ~ 3,  # 15-16 years old
+    Q41 == 7 ~ 2,  # 17+ years old (Lower Risk)
+    TRUE ~ NA_real_ # Handle NAs
+  ))
+
+# 2. Update the Survey Design Object (CRITICAL!)
+# The design object doesn't know about 'Q41_Recoded' yet.
+yrbsdes23 <- svydesign(
+  id      = ~ psu,
+  strata  = ~ stratum,
+  weights = ~ weight,
+  data    = yrbs23,
+  nest    = TRUE
+)
+
+# 3. Run the Regression with the new variable
+# Model: Q41 (Risk) predicted by Q80 (Social Media)
+m_recoded <- svyglm(Q41_Recoded ~ Q80, design = yrbsdes23)
+
+# 4. Compare the new slope
+print(broom::tidy(m_recoded))
+
+```
+```{r}
+# 1. Fit the actual survey model first
+my_model <- svyglm(Q41_Recoded ~ Q80, design = yrbsdes23)
+
+# 2. Extract the slope and intercept
+model_intercept <- coef(my_model)[1]
+model_slope <- coef(my_model)[2]
+
+# 3. Plot it
+ggplot(yrbs23, aes(x = Q80, y = Q41)) +
+  geom_jitter(width = 0.3, height = 0.3, alpha = 0.1) +
+  
+  # Use geom_abline with your extracted numbers
+  geom_abline(intercept = model_intercept, slope = model_slope, 
+              color = "red", size = 1.2) +
+  
+  theme_minimal() +
+  labs(title = "Age of Alcohol Initiation vs. Social Media Use")
+```
+```{r}
+# 1. Prepare the data (Column Normalized)
+tile_data <- yrbs23 %>%
+  drop_na(Q80, Q42) %>%
+  count(Q80, Q42) %>%
+  group_by(Q80) %>%            
+  mutate(prop = n / sum(n)) %>% 
+  ungroup()
+
+# 2. Get regression coefficients
+# Model: Alcohol (Y) predicted by Social Media (X)
+m <- svyglm(Q42 ~ Q80, design = yrbsdes23)
+slope <- coef(m)[2]
+intercept <- coef(m)[1]
+
+# 3. The Plot
+ggplot(tile_data, aes(x = Q80, y = Q42)) +
+  
+  # Layer 1: Heatmap 
+  geom_tile(aes(fill = prop), color = "grey20") + 
+  
+  # Layer 2: Numbers (Raw Counts)
+  geom_text(aes(label = n), color = "white", size = 3) +
+  
+  # Layer 3: Regression Line
+  geom_abline(intercept = intercept, slope = slope, 
+              color = "red", size = 1.2, linetype = "solid") +
+  scale_x_continuous(breaks = sort(unique(tile_data$Q80))) +
+  scale_y_continuous(breaks = sort(unique(tile_data$Q42))) +
+  
+  # Scales & Theme
+  # KEY CHANGE: trans = "log10" on the proportions
+  scale_fill_viridis_c(
+    option = "mako", 
+    direction = -1,
+    trans = "log10",                           # <--- The "Log" fix
+    breaks = c(0.001, 0.01, 0.1, 0.5),         # Manually set legend ticks (0.1%, 1%, 10%, 50%)
+    labels = scales::percent_format(accuracy = 0.1) # Format as %
+  ) +
+  
+  labs(
+    title = "Alcohol Use vs. Social Media Use (Column Normalized)",
+    subtitle = "Color intensity = % within column (Log Scale)",
+    x = "Social Media Use (Q80)", 
+    y = "Alcohol Use (Q42)",
+    fill = "Column %"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "grey95", color = NA)
+  )
+```
+```{r}
+# Ensure you have the model defined as we discussed
+m <- svyglm(Q42 ~ Q80, design = yrbsdes23)
+
+# Get the tidy output with Confidence Intervals (default is 95%)
+# This gives you: estimate (slope), p.value, conf.low, and conf.high
+model_stats <- broom::tidy(m, conf.int = TRUE)
+
+# Print it clearly
+print(model_stats[2,])
+```
+
+```{r}
+# 1. Prepare the data (Column Normalized)
+tile_data <- yrbs23 %>%
+  drop_na(Q80, Q46) %>%
+  count(Q80, Q46) %>%
+  group_by(Q80) %>%            
+  mutate(prop = n / sum(n)) %>% 
+  ungroup()
+
+# 2. Get regression coefficients
+# Model: Marijuana (Y) predicted by Social Media (X)
+m <- svyglm(Q46 ~ Q80, design = yrbsdes23)
+slope <- coef(m)[2]
+intercept <- coef(m)[1]
+
+# 3. The Plot
+ggplot(tile_data, aes(x = Q80, y = Q46)) +
+  
+  # Layer 1: Heatmap 
+  geom_tile(aes(fill = prop), color = "grey20") + 
+  
+  # Layer 2: Numbers (Raw Counts)
+  geom_text(aes(label = n), color = "white", size = 3) +
+  
+  # Layer 3: Regression Line
+  geom_abline(intercept = intercept, slope = slope, 
+              color = "red", size = 1.2, linetype = "solid") +
+  scale_x_continuous(breaks = sort(unique(tile_data$Q80))) +
+  scale_y_continuous(breaks = sort(unique(tile_data$Q46))) +
+  
+  # Scales & Theme
+  # KEY CHANGE: trans = "log10" on the proportions
+  scale_fill_viridis_c(
+    option = "mako", 
+    direction = -1,
+    trans = "log10",                           # <--- The "Log" fix
+    breaks = c(0.001, 0.01, 0.1, 0.5),         # Manually set legend ticks (0.1%, 1%, 10%, 50%)
+    labels = scales::percent_format(accuracy = 0.1) # Format as %
+  ) +
+  
+  labs(
+    title = "Marijuana Use vs. Social Media Use (Column Normalized)",
+    subtitle = "Color intensity = % within column (Log Scale)",
+    x = "Social Media Use (Q80)", 
+    y = "Marijuana Use (Q46)",
+    fill = "Column %"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "grey95", color = NA)
+  )
+```
+
+```{r}
+# Ensure you have the model defined as we discussed
+m <- svyglm(Q46 ~ Q80, design = yrbsdes23)
+
+# Get the tidy output with Confidence Intervals (default is 95%)
+# This gives you: estimate (slope), p.value, conf.low, and conf.high
+model_stats <- broom::tidy(m, conf.int = TRUE)
+
+# Print it clearly
+print(model_stats[2,])
+```
+
+```{r}
+# 1. Prepare the data (Column Normalized)
+tile_data <- yrbs23 %>%
+  drop_na(Q80, Q36) %>%
+  count(Q80, Q36) %>%
+  group_by(Q80) %>%            
+  mutate(prop = n / sum(n)) %>% 
+  ungroup()
+
+# 2. Get regression coefficients
+# Model: Marijuana (Y) predicted by Social Media (X)
+m <- svyglm(Q36 ~ Q80, design = yrbsdes23)
+slope <- coef(m)[2]
+intercept <- coef(m)[1]
+
+# 3. The Plot
+ggplot(tile_data, aes(x = Q80, y = Q36)) +
+  
+  # Layer 1: Heatmap 
+  geom_tile(aes(fill = prop), color = "grey20") + 
+  
+  # Layer 2: Numbers (Raw Counts)
+  geom_text(aes(label = n), color = "white", size = 3) +
+  
+  # Layer 3: Regression Line
+  geom_abline(intercept = intercept, slope = slope, 
+              color = "red", size = 1.2, linetype = "solid") +
+  scale_x_continuous(breaks = sort(unique(tile_data$Q80))) +
+  scale_y_continuous(breaks = sort(unique(tile_data$Q36))) +
+  
+  # Scales & Theme
+  # KEY CHANGE: trans = "log10" on the proportions
+  scale_fill_viridis_c(
+    option = "mako", 
+    direction = -1,
+    trans = "log10",                           # <--- The "Log" fix
+    breaks = c(0.001, 0.01, 0.1, 0.5),         # Manually set legend ticks (0.1%, 1%, 10%, 50%)
+    labels = scales::percent_format(accuracy = 0.1) # Format as %
+  ) +
+  
+  labs(
+    title = "Vape Use vs. Social Media Use (Column Normalized)",
+    subtitle = "Color intensity = % within column (Log Scale)",
+    x = "Social Media Use (Q80)", 
+    y = "Vape Use (Q36)",
+    fill = "Column %"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "grey95", color = NA)
+  )
+```
+
+```{r}
+# Ensure you have the model defined as we discussed
+m <- svyglm(Q46 ~ Q80, design = yrbsdes23)
+
+# Get the tidy output with Confidence Intervals (default is 95%)
+# This gives you: estimate (slope), p.value, conf.low, and conf.high
+model_stats <- broom::tidy(m, conf.int = TRUE)
+
+# Print it clearly
+print(model_stats[2,])
+```
+
+```{r}
+# 1. Prepare the data (Column Normalized)
+tile_data <- yrbs23 %>%
+  drop_na(Q80, Q88) %>%
+  count(Q80, Q88) %>%
+  group_by(Q80) %>%            
+  mutate(prop = n / sum(n)) %>% 
+  ungroup()
+
+# 2. Get regression coefficients
+# Model: Marijuana (Y) predicted by Social Media (X)
+m <- svyglm(Q88 ~ Q80, design = yrbsdes23)
+slope <- coef(m)[2]
+intercept <- coef(m)[1]
+
+# 3. The Plot
+ggplot(tile_data, aes(x = Q80, y = Q88)) +
+  
+  # Layer 1: Heatmap 
+  geom_tile(aes(fill = prop), color = "grey20") + 
+  
+  # Layer 2: Numbers (Raw Counts)
+  geom_text(aes(label = n), color = "white", size = 3) +
+  
+  # Layer 3: Regression Line
+  geom_abline(intercept = intercept, slope = slope, 
+              color = "red", size = 1.2, linetype = "solid") +
+  scale_x_continuous(breaks = sort(unique(tile_data$Q80))) +
+  scale_y_continuous(breaks = sort(unique(tile_data$Q88))) +
+  
+  # Scales & Theme
+  # KEY CHANGE: trans = "log10" on the proportions
+  scale_fill_viridis_c(
+    option = "mako", 
+    direction = -1,
+    trans = "log10",                           # <--- The "Log" fix
+    breaks = c(0.001, 0.01, 0.1, 0.5),         # Manually set legend ticks (0.1%, 1%, 10%, 50%)
+    labels = scales::percent_format(accuracy = 0.1) # Format as %
+  ) +
+  
+  labs(
+    title = "Sexual Abuse by an Older Person vs. Social Media Use (Column Normalized)",
+    subtitle = "Color intensity = % within column (Log Scale)",
+    x = "Social Media Use (Q80)", 
+    y = "Sexual Abuse (Q88)",
+    fill = "Column %"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "grey95", color = NA)
+  )
+```
+```{r}
+# 1. Prepare the Data (Weighted Probabilities)
+# We calculate the % of students who answered "1" (Yes) for each level of Q80
+plot_data <- yrbs23 %>%
+  drop_na(Q80, Q88) %>%
+  group_by(Q80) %>%
+  summarise(
+    # Calculate the weighted probability of Q88 being 1
+    # (Assuming 1=Yes, 0=No based on your cleanup)
+    prob = weighted.mean(Q88 == 1, w = weight, na.rm = TRUE),
+    n = n() # Keep count just for info
+  )
+
+# 2. Get Regression Coefficients (Same as before)
+m <- svyglm(Q88 ~ Q80, design = yrbsdes23)
+slope <- coef(m)[2]
+intercept <- coef(m)[1]
+
+# 3. The Plot
+ggplot(plot_data, aes(x = Q80, y = prob)) +
+  
+  # Layer 1: The Regression Line (The "Trend")
+  # We draw this first so the dots sit on top
+  geom_abline(intercept = intercept, slope = slope, 
+              color = "red", size = 1.2, linetype = "dashed") +
+  
+  # Layer 2: The Actual Data (Points & Line)
+  # This shows how the real data wiggles around your trend
+  geom_line(color = "steelblue", size = 1, alpha = 0.6) +
+  geom_point(aes(size = n), color = "steelblue") + # Size dots by sample size
+  
+  # Layer 3: Labels
+  # Add percentage labels to the dots for clarity
+  geom_text(aes(label = scales::percent(prob, accuracy = 1)), 
+            vjust = -1.5, color = "black", size = 3.5) +
+
+  # Scales & Theme
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, NA)) + # Start Y at 0%
+  scale_x_continuous(breaks = sort(unique(plot_data$Q80))) +
+  
+  labs(
+    title = "Risk of Sexual Abuse vs. Social Media Use",
+    subtitle = "Red dashed line = Linear Regression Trend",
+    x = "Social Media Use (Q80)",
+    y = "Probability of Sexual Abuse (Q88)",
+    size = "Sample Size"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "grey95", color = NA),
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r}
+# 1. Prepare Data (Same as before)
+plot_data <- yrbs23 %>%
+  drop_na(Q80, Q88) %>%
+  group_by(Q80) %>%
+  summarise(
+    prob = weighted.mean(Q88 == 1, w = weight, na.rm = TRUE),
+    n = n()
+  )
+
+# 2. Get Coefficients (Same as before)
+m <- svyglm(Q88 ~ Q80, design = yrbsdes23)
+slope <- coef(m)[2]
+intercept <- coef(m)[1]
+
+# 3. The "Minimizing" Plot
+ggplot(plot_data, aes(x = Q80, y = prob)) +
+  
+  # Layer 1: Regression Line (Looks flat now)
+  geom_abline(intercept = intercept, slope = slope, 
+              color = "red", size = 1.2, linetype = "dashed") +
+  
+  # Layer 2: Data Points
+  geom_line(color = "steelblue", size = 1, alpha = 0.6) +
+  geom_point(aes(size = n), color = "steelblue") +
+  
+  # Layer 3: Labels
+  geom_text(aes(label = scales::percent(prob, accuracy = 1)), 
+            vjust = -1.5, color = "black", size = 3) +
+
+  # SCALES: The Key Change
+  # limits = c(0, 1) forces the axis to go from 0% to 100%
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
+  scale_x_continuous(breaks = sort(unique(plot_data$Q80))) +
+  
+  labs(
+    title = "Risk of Sexual Abuse vs. Social Media Use (Full Scale)",
+    subtitle = "Scaled 0-100%: Note how the risk trend appears visually minimized",
+    x = "Social Media Use (Q80)",
+    y = "Probability of Sexual Abuse (0-100%)",
+    size = "Sample Size"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "grey95", color = NA),
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r}
+# Ensure you have the model defined as we discussed
+m <- svyglm(Q88 ~ Q80, design = yrbsdes23)
+
+# Get the tidy output with Confidence Intervals (default is 95%)
+# This gives you: estimate (slope), p.value, conf.low, and conf.high
+model_stats <- broom::tidy(m, conf.int = TRUE)
+
+# Print it clearly
+print(model_stats[2,])
+```
+
+```{r}
+# 1. Create the Age Groups (Stratification)
+yrbs23 <- yrbs23 %>%
+  mutate(
+    Age_Group = case_when(
+      Q1 <= 3 ~ "14 and Under",  # Levels 1, 2, 3 (12-14)
+      Q1 <= 6 ~ "15-17 Years",   # Levels 4, 5, 6 (15-17)
+      Q1 == 7 ~ "18+ Years",     # Level 7 (18+)
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  # Convert to factor to ensure logical order in the legend (Low -> High)
+  mutate(Age_Group = factor(Age_Group, levels = c("14 and Under", "15-17 Years", "18+ Years")))
+
+# 2. Prepare the Summary Points (for the clean dots)
+# We calculate the weighted probability for each age group separately
+age_plot_data <- yrbs23 %>%
+  drop_na(Q80, Q56, Age_Group) %>%
+  group_by(Q80, Age_Group) %>%
+  summarise(
+    prob = weighted.mean(Q56 == 1, w = weight, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+# 3. The Stratified Regression Plot
+ggplot() +
+  
+  # LAYER 1: Regression Lines (The "Slopes")
+  # We use the FULL dataset (yrbs23) here so the regression is statistically valid (N=15,000+)
+  # We map 'weight' so the lines respect the survey design
+  geom_smooth(data = yrbs23 %>% drop_na(Q80, Q56, Age_Group),
+              aes(x = Q80, y = Q56, color = Age_Group, weight = weight),
+              method = "lm", se = TRUE, alpha = 0.1) +
+  
+  # LAYER 2: Data Points (The "Averages")
+  # We use the summary data (age_plot_data) so we see 8 clean dots per group, not a mess
+  geom_point(data = age_plot_data,
+             aes(x = Q80, y = prob, color = Age_Group, size = n)) +
+  
+  # Formatting
+  scale_y_continuous(labels = scales::percent_format(), limits = c(0, NA)) +
+  scale_x_continuous(breaks = sort(unique(age_plot_data$Q80))) +
+  
+  # Colors: Green (Young/Safe) -> Red (Old/Risk)
+  scale_color_manual(values = c("14 and Under" = "forestgreen", 
+                                "15-17 Years" = "steelblue", 
+                                "18+ Years" = "firebrick")) +
+  
+  labs(
+    title = "Social Media vs. Sexual Intercourse (Stratified by Age)",
+    subtitle = "Regression slopes separated by age group to remove age confounding",
+    x = "Social Media Use (Q80)",
+    y = "Probability of Ever Having Sex",
+    color = "Age Group",
+    size = "Sample Size"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "grey95", color = NA),
+    legend.position = "right"
+  )
+
+```
+
+
+```{r}
+# 1. Ensure Q58 is Numeric (1-7) & Create Age Groups
+# (Re-running the Age_Group creation just to be safe)
+yrbs23 <- yrbs23 %>%
+  mutate(
+    # Recode Age if needed
+    Age_Group = case_when(
+      Q1 <= 3 ~ "14 and Under",
+      Q1 <= 6 ~ "15-17 Years",
+      Q1 == 7 ~ "18+ Years",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  mutate(Age_Group = factor(Age_Group, levels = c("14 and Under", "15-17 Years", "18+ Years"))) %>%
+  # Ensure Q58 is numeric
+  mutate(Q58 = as.numeric(Q58))
+
+# 2. Prepare Heatmap Data (Global, Column Normalized)
+# This creates the "Background" showing the overall shape of the data
+tile_data <- yrbs23 %>%
+  drop_na(Q80, Q58) %>%
+  count(Q80, Q58) %>%
+  group_by(Q80) %>%            
+  mutate(prop = n / sum(n)) %>% 
+  ungroup()
+
+# 3. The Combined Plot
+ggplot() +
+  
+  # LAYER 1: The Heatmap (Background)
+  geom_tile(data = tile_data, aes(x = Q80, y = Q58, fill = prop), color = "grey20") +
+  
+  # LAYER 2: The "Global" Slope (Dashed Gray)
+  # Uses the full dataset to show the trend ignoring age
+  geom_smooth(data = yrbs23 %>% drop_na(Q80, Q58),
+              aes(x = Q80, y = Q58, weight = weight),
+              method = "lm", se = FALSE, 
+              color = "white", linetype = "dashed", size = 1.2, alpha = 0.8) +
+  
+  # LAYER 3: The "Age Stratified" Slopes (Colored)
+  # Uses the Age_Group variable to split the lines
+  geom_smooth(data = yrbs23 %>% drop_na(Q80, Q58, Age_Group),
+              aes(x = Q80, y = Q58, color = Age_Group, weight = weight),
+              method = "lm", se = TRUE, alpha = 0.15) +
+  
+  # Formatting & Scales
+  scale_x_continuous(breaks = sort(unique(tile_data$Q80))) +
+  scale_y_continuous(breaks = 1:7, labels = c("0", "1", "2", "3", "4", "5", "6+")) +
+  
+  # Color Scales
+  # 1. Heatmap (Mako)
+  scale_fill_viridis_c(
+    option = "mako", direction = -1, trans = "log10",
+    breaks = c(0.001, 0.01, 0.1, 0.5), 
+    labels = scales::percent_format(accuracy = 0.1),
+    name = "Global %"
+  ) +
+  
+  # 2. Lines (Traffic Light Colors for Age)
+  scale_color_manual(
+    values = c("14 and Under" = "chartreuse",  # Bright Green pops on dark
+               "15-17 Years" = "cyan",         # Bright Blue pops on dark
+               "18+ Years" = "magenta"),       # Bright Pink/Red pops on dark
+    name = "Age Group"
+  ) +
+  
+  labs(
+    title = "Number of Sex Partners vs. Social Media Use",
+    subtitle = "Background: Global Density | Dashed: Global Trend | Colored: Age-Specific Trends",
+    x = "Social Media Use (Q80)",
+    y = "Number of Sex Partners (Q58)"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "grey95", color = NA),
+    legend.position = "right"
+  )
+```
+
+```{r}
+# 1. Prepare the data (Column Normalized)
+tile_data <- yrbs23 %>%
+  drop_na(Q80, Q84) %>%
+  count(Q80, Q84) %>%
+  group_by(Q80) %>%            
+  mutate(prop = n / sum(n)) %>% 
+  ungroup()
+
+# 2. Get regression coefficients
+# Model: Mental Health (Y) predicted by Social Media (X)
+m <- svyglm(Q84 ~ Q80, design = yrbsdes23)
+slope <- coef(m)[2]
+intercept <- coef(m)[1]
+
+# 3. The Plot
+ggplot(tile_data, aes(x = Q80, y = Q84)) +
+  
+  # Layer 1: Heatmap 
+  geom_tile(aes(fill = prop), color = "grey20") + 
+  
+  # Layer 2: Numbers (Raw Counts)
+  geom_text(aes(label = n), color = "white", size = 3) +
+  
+  # Layer 3: Regression Line
+  geom_abline(intercept = intercept, slope = slope, 
+              color = "red", size = 1.2, linetype = "solid") +
+  scale_x_continuous(breaks = sort(unique(tile_data$Q80))) +
+  scale_y_continuous(breaks = sort(unique(tile_data$Q84))) +
+  
+  # Scales & Theme
+  # KEY CHANGE: trans = "log10" on the proportions
+  scale_fill_viridis_c(
+    option = "mako", 
+    direction = -1,
+    trans = "log10",                           # <--- The "Log" fix
+    breaks = c(0.001, 0.01, 0.1, 0.5),         # Manually set legend ticks (0.1%, 1%, 10%, 50%)
+    labels = scales::percent_format(accuracy = 0.1) # Format as %
+  ) +
+  
+  labs(
+    title = "How Often is your Mental Health Not Good? (Column Normalized)",
+    subtitle = "Color intensity = % within column (Log Scale)",
+    x = "Social Media Use (Q80)", 
+    y = "Current Mental Health (Q84)",
+    fill = "Column %"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "grey95", color = NA)
+  )
+```
+
+```{r}
+# Ensure you have the model defined as we discussed
+m <- svyglm(Q84 ~ Q80, design = yrbsdes23)
+
+# Get the tidy output with Confidence Intervals (default is 95%)
+# This gives you: estimate (slope), p.value, conf.low, and conf.high
+model_stats <- broom::tidy(m, conf.int = TRUE)
+
+# Print it clearly
+print(model_stats[2,])
+```
+
+```{r}
+# 1. Prepare the data (Column Normalized)
+tile_data <- yrbs23 %>%
+  drop_na(Q80, Q89) %>%
+  count(Q80, Q89) %>%
+  group_by(Q80) %>%            
+  mutate(prop = n / sum(n)) %>% 
+  ungroup()
+
+# 2. Get regression coefficients
+# Model: Mental Health (Y) predicted by Social Media (X)
+m <- svyglm(Q89 ~ Q80, design = yrbsdes23)
+slope <- coef(m)[2]
+intercept <- coef(m)[1]
+
+# 3. The Plot
+ggplot(tile_data, aes(x = Q80, y = Q89)) +
+  
+  # Layer 1: Heatmap 
+  geom_tile(aes(fill = prop), color = "grey20") + 
+  
+  # Layer 2: Numbers (Raw Counts)
+  geom_text(aes(label = n), color = "white", size = 3) +
+  
+  # Layer 3: Regression Line
+  geom_abline(intercept = intercept, slope = slope, 
+              color = "red", size = 1.2, linetype = "solid") +
+  scale_x_continuous(breaks = sort(unique(tile_data$Q80))) +
+  scale_y_continuous(breaks = sort(unique(tile_data$Q89))) +
+  
+  # Scales & Theme
+  # KEY CHANGE: trans = "log10" on the proportions
+  scale_fill_viridis_c(
+    option = "mako", 
+    direction = -1,
+    trans = "log10",                           # <--- The "Log" fix
+    breaks = c(0.001, 0.01, 0.1, 0.5),         # Manually set legend ticks (0.1%, 1%, 10%, 50%)
+    labels = scales::percent_format(accuracy = 0.1) # Format as %
+  ) +
+  
+  labs(
+    title = "How often does an adult in your househol insult you? (Column Normalized)",
+    subtitle = "Color intensity = % within column (Log Scale)",
+    x = "Social Media Use (Q89)", 
+    y = "Frequency of Adult Insults (Q89)",
+    fill = "Column %"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    plot.background = element_rect(fill = "grey95", color = NA)
+  )
+```
+
+```{r}
+# Ensure you have the model defined as we discussed
+m <- svyglm(Q89 ~ Q80, design = yrbsdes23)
+
+# Get the tidy output with Confidence Intervals (default is 95%)
+# This gives you: estimate (slope), p.value, conf.low, and conf.high
+model_stats <- broom::tidy(m, conf.int = TRUE)
+
+# Print it clearly
+print(model_stats[2,])
+```
+
+
+```{r}
+
+svyexample <- table(c(yrbs23[1234,]$stratum, yrbs23[1234,]$psu, yrbs23[1234,]$weight))
+svyexample
+# Quick peek at just those 3 columns for row 1234
+student_a <- yrbs23[1234, c("stratum", "psu", "weight")]
+student_b <- yrbs23[7, c("stratum", "psu", "weight")]
+
+# Use rbind() to combine rows
+df <- rbind(student_a, student_b)
+# Add labels for clarity
+rownames(df) <- c("Student A (Row 1234)", "Student B (Row 7)")
+df
+```
+
